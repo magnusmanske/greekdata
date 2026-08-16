@@ -5,6 +5,7 @@
 //! once, here, for every source.
 
 pub mod fsa_pharmacies;
+pub mod moh_hospitals;
 
 use crate::{
     Error, Result,
@@ -296,7 +297,10 @@ pub fn today() -> Date {
 
 /// Every source the binary knows about.
 pub fn all() -> Vec<Box<dyn Source>> {
-    vec![Box::new(fsa_pharmacies::FsaPharmacies)]
+    vec![
+        Box::new(fsa_pharmacies::FsaPharmacies),
+        Box::new(moh_hospitals::MohAtticaHospitals),
+    ]
 }
 
 /// Looks up a source by its slug.
