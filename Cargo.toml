@@ -1,0 +1,40 @@
+[package]
+name = "greekdata"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.92"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+jiff = { version = "0.2", features = ["serde"] }
+pdf-extract = "0.12"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "rustls-native-certs",
+    "charset",
+    "form",
+    "gzip",
+    "http2",
+] }
+scraper = "0.27"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-none",
+    "sqlite",
+    "macros",
+    "migrate",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "time"] }
+tower-http = { version = "0.7", features = ["cors", "timeout", "limit", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

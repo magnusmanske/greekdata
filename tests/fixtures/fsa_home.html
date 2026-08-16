@@ -1,0 +1,20 @@
+<!-- Fixture: the date picker from https://fsa-efimeries.gr/, trimmed to four dates.
+     The association publishes roughly seven weeks ahead. -->
+<!DOCTYPE html>
+<html lang="el">
+<head><meta charset="utf-8"><title>ΦΑΡΜΑΚΕΥΤΙΚΟΣ ΣΥΛΛΟΓΟΣ ΑΤΤΙΚΗΣ</title></head>
+<body id="body" class="bg-light">
+  <form id="filter-form" hx-post="/Home/FilteredHomeResults" hx-target="#duty-cards">
+    <select hx-trigger="change" id="Date" name="Date" class="form-control">
+      <option value="2026-08-17" selected="selected">Δευτέρα 17 Αυγούστου</option>
+      <option value="2026-08-18">Τρίτη 18 Αυγούστου</option>
+      <option value="2026-08-19">Τετάρτη 19 Αυγούστου</option>
+      <option value="2026-08-20">Πέμπτη 20 Αυγούστου</option>
+    </select>
+    <input id="address-input" name="address" type="text" class="form-control" autocomplete="off">
+    <input hidden type="checkbox" id="IsOpen" name="IsOpen" value="true">
+    <input name="IsOpen" type="hidden" value="false">
+  </form>
+  <div id="duty-cards"></div>
+</body>
+</html>
