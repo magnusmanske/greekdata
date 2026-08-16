@@ -7,7 +7,7 @@ use greekdata::{
     config::Config,
     db::{Db, query},
     server,
-    sources::{self, Ctx, DateWindow},
+    sources::{self, Ctx, DateWindow, WhenUnchanged},
 };
 use jiff::civil::Date;
 
@@ -49,6 +49,12 @@ enum Command {
         /// Shorthand for a window of this many days ending at `--to`.
         #[arg(long, conflicts_with = "from")]
         days: Option<u16>,
+        /// Parse documents again even when they have not changed upstream.
+        ///
+        /// Unchanged documents are normally skipped, since identical bytes can only
+        /// produce identical records. Use this after changing a parser.
+        #[arg(long)]
+        reparse: bool,
     },
 
     /// Find coordinates for stored places that arrived without any.
@@ -105,9 +111,15 @@ async fn run() -> Result<()> {
             from,
             to,
             days,
+            reparse,
         } => {
             let ctx = Ctx::open(&config, policy).await?;
-            ingest(&ctx, source.as_deref(), window(from, to, days)).await
+            let unchanged = if reparse {
+                WhenUnchanged::Reparse
+            } else {
+                WhenUnchanged::Skip
+            };
+            ingest(&ctx, source.as_deref(), window(from, to, days), unchanged).await
         }
         Command::Locate => {
             let ctx = Ctx::open(&config, policy).await?;
@@ -150,7 +162,12 @@ fn window(from: Option<Date>, to: Option<Date>, days: Option<u16>) -> DateWindow
     DateWindow::new(start, end)
 }
 
-async fn ingest(ctx: &Ctx, source_id: Option<&str>, window: DateWindow) -> Result<()> {
+async fn ingest(
+    ctx: &Ctx,
+    source_id: Option<&str>,
+    window: DateWindow,
+    unchanged: WhenUnchanged,
+) -> Result<()> {
     let selected = match source_id {
         Some(id) => vec![sources::by_id(id)?],
         None => sources::all(),
@@ -163,13 +180,15 @@ async fn ingest(ctx: &Ctx, source_id: Option<&str>, window: DateWindow) -> Resul
             to = %window.to,
             "ingesting"
         );
-        let report = sources::ingest(ctx, source.as_ref(), window).await?;
+        let report = sources::ingest(ctx, source.as_ref(), window, unchanged).await?;
         println!(
-            "{}: {} documents, {} entities, {} properties, {} warnings, {} failed",
+            "{}: {} documents, {} entities, {} properties, \
+             {} unchanged, {} warnings, {} failed",
             source.id(),
             report.documents,
             report.entities,
             report.properties,
+            report.skipped,
             report.warnings,
             report.failed
         );

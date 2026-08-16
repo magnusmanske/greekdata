@@ -15,11 +15,14 @@ use crate::{
 use jiff::{Timestamp, civil::Date};
 use sqlx::{Sqlite, Transaction};
 
-/// A stored source document, and whether we had already seen this exact content.
+/// A stored source document.
 #[derive(Debug, Clone, Copy)]
 pub struct SnapshotRef {
     pub id: i64,
+    /// False when these exact bytes were already stored under this URL.
     pub is_new: bool,
+    /// Whether a previous run already parsed this content into records.
+    pub processed: bool,
 }
 
 /// What one document contributed.
@@ -41,8 +44,11 @@ pub async fn record_snapshot(
     reference: &DocumentRef,
     fetched: &Fetched,
 ) -> Result<SnapshotRef> {
-    let existing: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM snapshot WHERE source_id = ?1 AND url = ?2 AND sha256 = ?3",
+    // The content hash is what decides sameness: an unchanged document re-fetched from
+    // upstream lands on the row we already have, whatever its URL now says.
+    let existing: Option<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, processed_at FROM snapshot
+         WHERE source_id = ?1 AND url = ?2 AND sha256 = ?3",
     )
     .bind(source_id)
     .bind(reference.identity())
@@ -50,8 +56,12 @@ pub async fn record_snapshot(
     .fetch_optional(db.pool())
     .await?;
 
-    if let Some(id) = existing {
-        return Ok(SnapshotRef { id, is_new: false });
+    if let Some((id, processed_at)) = existing {
+        return Ok(SnapshotRef {
+            id,
+            is_new: false,
+            processed: processed_at.is_some(),
+        });
     }
 
     let id: i64 = sqlx::query_scalar(
@@ -69,7 +79,22 @@ pub async fn record_snapshot(
     .fetch_one(db.pool())
     .await?;
 
-    Ok(SnapshotRef { id, is_new: true })
+    Ok(SnapshotRef {
+        id,
+        is_new: true,
+        processed: false,
+    })
+}
+
+/// Records that a snapshot's content has been parsed, so later runs can skip it.
+pub async fn mark_processed(db: &Db, snapshot_id: i64) -> Result<()> {
+    sqlx::query("UPDATE snapshot SET processed_at = ?1 WHERE id = ?2")
+        .bind(Timestamp::now().to_string())
+        .bind(snapshot_id)
+        .execute(db.pool())
+        .await?;
+
+    Ok(())
 }
 
 /// Stores everything a document said, replacing whatever that same document contributed

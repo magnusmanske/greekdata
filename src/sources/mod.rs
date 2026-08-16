@@ -119,10 +119,15 @@ impl DocumentRef {
 
     /// How eagerly this document should be re-fetched.
     fn cache_hint(&self) -> CachePolicy {
-        if self.volatile {
-            CachePolicy::Force
+        if !self.volatile {
+            return CachePolicy::PreferCache;
+        }
+        // A conditional GET lets the server answer "unchanged" without sending the file
+        // again. A form submission cannot be revalidated, so it has to be re-sent.
+        if self.form.is_empty() {
+            CachePolicy::Revalidate
         } else {
-            CachePolicy::PreferCache
+            CachePolicy::Force
         }
     }
 }
@@ -192,10 +197,22 @@ pub trait Source: Send + Sync {
     fn parse(&self, doc: &FetchedDoc) -> Result<Extraction>;
 }
 
+/// What to do with a document whose content has not changed since it was last parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhenUnchanged {
+    /// Leave it alone. Re-parsing identical bytes can only produce identical records.
+    #[default]
+    Skip,
+    /// Parse it again anyway — what to use after changing a parser.
+    Reparse,
+}
+
 /// What an ingest run did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct IngestReport {
     pub documents: usize,
+    /// Documents left alone because their content had not changed.
+    pub skipped: usize,
     pub entities: usize,
     pub properties: usize,
     pub warnings: usize,
@@ -207,15 +224,21 @@ pub struct IngestReport {
 /// Documents are processed oldest revision first, so that supersession lands the right
 /// way round. A document that fails to parse is reported and skipped; it does not abort
 /// the rest of the run.
-pub async fn ingest(ctx: &Ctx, source: &dyn Source, window: DateWindow) -> Result<IngestReport> {
+pub async fn ingest(
+    ctx: &Ctx,
+    source: &dyn Source,
+    window: DateWindow,
+    unchanged: WhenUnchanged,
+) -> Result<IngestReport> {
     let mut references = source.discover(ctx, window).await?;
     references.retain(|reference| reference.date.is_none_or(|date| window.contains(date)));
     references.sort_by_key(|reference| (reference.date, reference.revision));
 
     let mut report = IngestReport::default();
     for reference in &references {
-        match ingest_document(ctx, source, reference).await {
-            Ok(stored) => {
+        match ingest_document(ctx, source, reference, unchanged).await {
+            Ok(None) => report.skipped += 1,
+            Ok(Some(stored)) => {
                 report.documents += 1;
                 report.entities += stored.entities;
                 report.properties += stored.properties;
@@ -249,13 +272,24 @@ struct DocumentOutcome {
     warnings: usize,
 }
 
+/// Fetches, parses and stores one document. Returns `None` when it was left alone
+/// because its content had not changed.
 async fn ingest_document(
     ctx: &Ctx,
     source: &dyn Source,
     reference: &DocumentRef,
-) -> Result<DocumentOutcome> {
+    unchanged: WhenUnchanged,
+) -> Result<Option<DocumentOutcome>> {
     let doc = ctx.fetch(source.id(), reference).await?;
     let snapshot = ingest::record_snapshot(&ctx.db, source.id(), reference, &doc.fetched).await?;
+
+    // Identical bytes cannot yield different records, so there is nothing to redo. This
+    // is what makes a daily run cheap and a long backfill re-runnable: the expensive
+    // part of a hospital rota is parsing the PDF, not fetching it.
+    if snapshot.processed && unchanged == WhenUnchanged::Skip {
+        tracing::debug!(url = %reference.url, sha256 = %doc.fetched.sha256, "unchanged");
+        return Ok(None);
+    }
 
     let extraction = source.parse(&doc)?;
     let stored = ingest::store(&ctx.db, source.id(), snapshot, &extraction).await?;
@@ -273,6 +307,8 @@ async fn ingest_document(
     if let Some(date) = reference.date {
         ingest::resolve_supersession(&ctx.db, source.id(), date).await?;
     }
+    // Only now, with the records safely stored, may this content be treated as done.
+    ingest::mark_processed(&ctx.db, snapshot.id).await?;
 
     tracing::info!(
         url = %reference.url,
@@ -282,11 +318,11 @@ async fn ingest_document(
         "ingested"
     );
 
-    Ok(DocumentOutcome {
+    Ok(Some(DocumentOutcome {
         entities: stored.entities,
         properties: stored.properties,
         warnings: warnings.len(),
-    })
+    }))
 }
 
 /// Today's date in Athens, which is the calendar these rotas are published against.
@@ -345,12 +381,23 @@ mod tests {
     }
 
     #[test]
-    fn volatile_documents_bypass_the_cache() {
-        let reference = DocumentRef::new("https://example.org/", "today").volatile(true);
-        assert_eq!(reference.cache_hint(), CachePolicy::Force);
+    fn a_settled_document_is_never_re_fetched() {
         assert_eq!(
             DocumentRef::new("https://example.org/", "archive").cache_hint(),
             CachePolicy::PreferCache
         );
+    }
+
+    #[test]
+    fn a_volatile_document_is_checked_as_cheaply_as_the_method_allows() {
+        // A GET can ask the server whether anything changed and be told "no".
+        let get = DocumentRef::new("https://example.org/", "today").volatile(true);
+        assert_eq!(get.cache_hint(), CachePolicy::Revalidate);
+
+        // A form submission cannot be revalidated, so it has to be sent again.
+        let post = DocumentRef::new("https://example.org/", "today")
+            .volatile(true)
+            .with_form(vec![("Date".into(), "2026-08-17".into())]);
+        assert_eq!(post.cache_hint(), CachePolicy::Force);
     }
 }

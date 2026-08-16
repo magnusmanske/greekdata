@@ -138,6 +138,33 @@ impl Fetcher {
         self.fetch(namespace, "GET", url, None, hint).await
     }
 
+    /// Stores `body` in the cache as though it had been fetched from `url`.
+    ///
+    /// For feeding in a document obtained some other way — a file downloaded by hand,
+    /// or a fixture a test wants the pipeline to read.
+    pub async fn seed(&self, namespace: &str, url: &str, body: &[u8]) -> Result<()> {
+        let key = cache_key("GET", url, None);
+        let dir = self.root.join(sanitize_namespace(namespace));
+        let meta = CacheMeta {
+            url: url.to_string(),
+            method: "GET".to_string(),
+            sha256: hex_digest(body),
+            fetched_at: Timestamp::now(),
+            etag: None,
+            last_modified: None,
+            content_type: None,
+        };
+
+        write_cache(
+            &dir,
+            &dir.join(format!("{key}.bin")),
+            &dir.join(format!("{key}.json")),
+            body,
+            &meta,
+        )
+        .await
+    }
+
     /// Submits a form via POST. The body is part of the cache key.
     pub async fn post_form(
         &self,
@@ -183,7 +210,9 @@ impl Fetcher {
             (CachePolicy::PreferCache, Some(hit)) => return Ok(hit.clone()),
             (CachePolicy::CacheOnly, Some(hit)) => return Ok(hit.clone()),
             (CachePolicy::CacheOnly, None) => return Err(Error::CacheMiss(url.to_string())),
-            (CachePolicy::Revalidate, Some(hit)) if !can_revalidate => return Ok(hit.clone()),
+            // A caller asking to revalidate something that cannot be revalidated — a
+            // form submission — wants current data, so re-send it rather than quietly
+            // handing back a copy that may be out of date.
             _ => {}
         }
 
