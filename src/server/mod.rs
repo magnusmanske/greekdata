@@ -17,6 +17,22 @@ use tower_http::{
     timeout::TimeoutLayer, trace::TraceLayer,
 };
 
+/// The page is self-contained: scripts, styles and marker images all come from here, so
+/// nothing may be loaded from anywhere else. The one exception is map tiles.
+///
+/// Both the bare tile host and its sub-domains are listed. A CSP wildcard requires at
+/// least one label, so `*.tile.openstreetmap.org` permits `a.tile.openstreetmap.org` but
+/// not `tile.openstreetmap.org` — which is the host the map actually uses, and listing
+/// only the wildcard silently blocked every tile.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
+     script-src 'self'; \
+     style-src 'self'; \
+     img-src 'self' data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org; \
+     connect-src 'self'; \
+     base-uri 'none'; \
+     form-action 'none'; \
+     frame-ancestors 'none'";
+
 /// Whether an entry is something a person visits or something a program calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
@@ -195,19 +211,9 @@ pub fn router(config: &Config, db: Db) -> Router {
             axum::http::header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         ))
-        // The page is self-contained, so nothing may be loaded from anywhere else.
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(
-                "default-src 'none'; \
-                 script-src 'self'; \
-                 style-src 'self'; \
-                 img-src 'self' data: https://*.tile.openstreetmap.org; \
-                 connect-src 'self'; \
-                 base-uri 'none'; \
-                 form-action 'none'; \
-                 frame-ancestors 'none'",
-            ),
+            HeaderValue::from_static(CONTENT_SECURITY_POLICY),
         ))
         .with_state(AppState {
             db,
@@ -273,6 +279,42 @@ mod tests {
             escape("<script>alert('x' & \"y\")</script>"),
             "&lt;script&gt;alert(&#39;x&#39; &amp; &quot;y&quot;)&lt;/script&gt;"
         );
+    }
+
+    /// The origin the map script loads tiles from, read out of the script itself.
+    fn tile_origin() -> String {
+        let script = include_str!("../../assets/app.js");
+        let url = script
+            .split("L.tileLayer(\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("app.js should create a tile layer");
+
+        let after_scheme = url.find("://").expect("an absolute tile URL") + 3;
+        let host_end = url[after_scheme..]
+            .find('/')
+            .map_or(url.len(), |at| after_scheme + at);
+        url[..host_end].to_string()
+    }
+
+    #[test]
+    fn the_policy_allows_the_tile_server_the_map_actually_uses() {
+        // The policy and the script live in different files and different languages, so
+        // nothing but a test stops them drifting apart — and when they do, the map draws
+        // as an empty grey grid with the reason only in the browser console.
+        let origin = tile_origin();
+        assert!(
+            CONTENT_SECURITY_POLICY.contains(&origin),
+            "app.js loads tiles from {origin}, which the policy does not allow:\n  {CONTENT_SECURITY_POLICY}"
+        );
+    }
+
+    #[test]
+    fn the_policy_still_refuses_everything_else() {
+        assert!(CONTENT_SECURITY_POLICY.starts_with("default-src 'none'"));
+        assert!(CONTENT_SECURITY_POLICY.contains("script-src 'self'"));
+        assert!(!CONTENT_SECURITY_POLICY.contains("unsafe-inline"));
+        assert!(!CONTENT_SECURITY_POLICY.contains("unsafe-eval"));
     }
 
     #[test]
