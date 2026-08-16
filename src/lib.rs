@@ -8,6 +8,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod greek;
+pub mod locate;
 pub mod model;
 pub mod pdf;
 pub mod server;

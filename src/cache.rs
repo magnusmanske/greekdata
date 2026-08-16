@@ -404,7 +404,7 @@ pub fn encode_form(form: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-fn percent_encode(value: &str) -> String {
+pub fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
         match byte {

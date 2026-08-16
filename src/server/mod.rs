@@ -4,7 +4,9 @@
 //! (limits and radii are clamped, dates must parse), all SQL is parameterized, and CORS
 //! is off unless origins are configured explicitly.
 
+mod assets;
 mod index;
+mod map;
 mod routes;
 
 use crate::{Result, config::Config, db::Db};
@@ -15,6 +17,13 @@ use tower_http::{
     timeout::TimeoutLayer, trace::TraceLayer,
 };
 
+/// Whether an entry is something a person visits or something a program calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    Page,
+    Api,
+}
+
 /// A query parameter an endpoint accepts.
 pub struct Parameter {
     pub name: &'static str,
@@ -23,6 +32,7 @@ pub struct Parameter {
 
 /// What an endpoint is, for both routing and the front page.
 pub struct Endpoint {
+    pub surface: Surface,
     pub path: &'static str,
     pub summary: &'static str,
     pub parameters: &'static [Parameter],
@@ -33,6 +43,7 @@ pub struct Endpoint {
 impl Endpoint {
     fn doc(&self) -> EndpointDoc {
         EndpointDoc {
+            surface: self.surface,
             path: self.path.to_string(),
             summary: self.summary,
             parameters: self.parameters,
@@ -43,6 +54,7 @@ impl Endpoint {
 /// The documentation half of an [`Endpoint`], kept in state for the front page.
 #[derive(Clone)]
 pub struct EndpointDoc {
+    pub surface: Surface,
     pub path: String,
     pub summary: &'static str,
     pub parameters: &'static [Parameter],
@@ -75,6 +87,22 @@ fn endpoints() -> Vec<Endpoint> {
 
     vec![
         Endpoint {
+            surface: Surface::Page,
+            path: "/pharmacies",
+            summary: "Map of the pharmacies on duty in Attica, with opening hours, phone \
+                      numbers and directions.",
+            parameters: &[],
+            route: get(map::pharmacies),
+        },
+        Endpoint {
+            surface: Surface::Page,
+            path: "/hospitals",
+            summary: "Map of the hospitals on call in Attica, by clinical speciality.",
+            parameters: &[],
+            route: get(map::hospitals),
+        },
+        Endpoint {
+            surface: Surface::Api,
             path: "/api/v1/on-call",
             summary: "Pharmacies, hospitals and health centres on duty on a given day, \
                       newest published version of the rota, optionally nearest first.",
@@ -94,6 +122,7 @@ fn endpoints() -> Vec<Endpoint> {
             route: get(routes::on_call),
         },
         Endpoint {
+            surface: Surface::Api,
             path: "/api/v1/entities",
             summary: "Search stored places by name. Matching ignores accents, case, \
                       punctuation and spacing.",
@@ -111,18 +140,21 @@ fn endpoints() -> Vec<Endpoint> {
             route: get(routes::entities),
         },
         Endpoint {
+            surface: Surface::Api,
             path: "/api/v1/entities/{id}",
             summary: "One place by its numeric id.",
             parameters: &[],
             route: get(routes::entity),
         },
         Endpoint {
+            surface: Surface::Api,
             path: "/api/v1/sources",
             summary: "The data sources in use, with their publishers and terms.",
             parameters: &[],
             route: get(routes::sources),
         },
         Endpoint {
+            surface: Surface::Api,
             path: "/healthz",
             summary: "Liveness check. Returns `ok`.",
             parameters: &[],
@@ -150,6 +182,7 @@ pub fn router(config: &Config, db: Db) -> Router {
 
     routes
         .route("/", get(index::index))
+        .route("/assets/{*path}", get(assets::asset))
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
@@ -166,7 +199,14 @@ pub fn router(config: &Config, db: Db) -> Router {
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+                "default-src 'none'; \
+                 script-src 'self'; \
+                 style-src 'self'; \
+                 img-src 'self' data: https://*.tile.openstreetmap.org; \
+                 connect-src 'self'; \
+                 base-uri 'none'; \
+                 form-action 'none'; \
+                 frame-ancestors 'none'",
             ),
         ))
         .with_state(AppState {
@@ -203,9 +243,37 @@ fn cors(config: &Config) -> CorsLayer {
     }
 }
 
+/// Escapes text for HTML.
+///
+/// Everything rendered by this server comes from the source code rather than from a
+/// request, but escaping is applied anyway: the moment something becomes user- or
+/// data-derived, forgetting it would be an injection.
+pub fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markup_in_text_is_escaped() {
+        assert_eq!(
+            escape("<script>alert('x' & \"y\")</script>"),
+            "&lt;script&gt;alert(&#39;x&#39; &amp; &quot;y&quot;)&lt;/script&gt;"
+        );
+    }
 
     #[test]
     fn every_endpoint_is_documented() {

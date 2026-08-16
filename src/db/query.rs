@@ -25,6 +25,8 @@ pub struct OnCallRow {
     pub lat: Option<f64>,
     pub lon: Option<f64>,
     pub phone: Option<String>,
+    /// Where the coordinates came from, when not from the source itself.
+    pub location_source: Option<String>,
     pub on_date: String,
     pub starts_at: Option<String>,
     pub ends_at: Option<String>,
@@ -50,6 +52,7 @@ pub struct EntityRow {
     pub lon: Option<f64>,
     pub phone: Option<String>,
     pub url: Option<String>,
+    pub location_source: Option<String>,
 }
 
 /// A parse problem recorded during ingest.
@@ -101,7 +104,7 @@ pub async fn on_call(db: &Db, query: &OnCallQuery) -> Result<Vec<OnCallRow>> {
 
     let mut rows: Vec<OnCallRow> = sqlx::query_as(
         "SELECT e.id AS entity_id, e.kind, e.name, e.address, e.municipality, e.lat, e.lon,
-                e.phone, p.on_date, p.starts_at, p.ends_at, p.payload,
+                e.phone, e.location_source, p.on_date, p.starts_at, p.ends_at, p.payload,
                 s.source_id, s.url AS source_url
          FROM property p
          JOIN entity e   ON e.id = p.entity_id
@@ -152,7 +155,7 @@ pub async fn entities(
     let pattern = search.map(|text| format!("%{}%", crate::greek::matching_key(text)));
 
     Ok(sqlx::query_as(
-        "SELECT id, kind, name, address, municipality, lat, lon, phone, url
+        "SELECT id, kind, name, address, municipality, lat, lon, phone, url, location_source
          FROM entity
          WHERE (?1 IS NULL OR kind = ?1)
            AND (?2 IS NULL OR name_folded LIKE ?2)
@@ -168,7 +171,7 @@ pub async fn entities(
 
 pub async fn entity(db: &Db, id: i64) -> Result<Option<EntityRow>> {
     Ok(sqlx::query_as(
-        "SELECT id, kind, name, address, municipality, lat, lon, phone, url
+        "SELECT id, kind, name, address, municipality, lat, lon, phone, url, location_source
          FROM entity WHERE id = ?1",
     )
     .bind(id)

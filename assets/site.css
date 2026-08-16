@@ -1,0 +1,156 @@
+/* Shared styles for the information page and the maps. Mobile first: the map pages are
+   most likely to be opened on a phone, outside, in a hurry. */
+
+:root {
+  color-scheme: light dark;
+  --edge: rgba(128, 128, 128, 0.35);
+  --muted: rgba(128, 128, 128, 0.12);
+  --accent: #0a7d55;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+a { color: var(--accent); }
+
+/* ---- Information page ---- */
+
+.prose {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+.prose h1 { margin-bottom: 0.2rem; }
+.tagline { margin-top: 0; opacity: 0.75; }
+.prose h2 {
+  margin-top: 2.5rem;
+  border-bottom: 1px solid var(--edge);
+  padding-bottom: 0.3rem;
+}
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.endpoint { margin-bottom: 1.5rem; }
+.endpoint code.path { font-size: 1rem; font-weight: 600; }
+.params { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; opacity: 0.85; }
+.source { margin-bottom: 0.9rem; }
+.disclaimer {
+  border: 1px solid var(--edge);
+  border-radius: 0.4rem;
+  padding: 0.8rem 1rem;
+  background: var(--muted);
+}
+.maplinks { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1.4rem 0; }
+.maplinks a {
+  flex: 1 1 12rem;
+  text-align: center;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--edge);
+  border-radius: 0.5rem;
+  text-decoration: none;
+  font-weight: 600;
+}
+footer { margin-top: 3rem; font-size: 0.85rem; opacity: 0.7; }
+
+/* ---- Map pages ---- */
+
+body.map { display: flex; flex-direction: column; height: 100dvh; }
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--edge);
+}
+.bar h1 { font-size: 1.05rem; margin: 0; flex: 1 1 auto; }
+.bar .home { text-decoration: none; font-size: 1.3rem; line-height: 1; }
+.bar input[type="date"],
+.bar button {
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  /* Comfortably tappable. */
+  min-height: 2.75rem;
+}
+.bar button { cursor: pointer; }
+
+#map { flex: 1 1 55%; min-height: 12rem; }
+
+.results {
+  flex: 1 1 45%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-top: 1px solid var(--edge);
+}
+.status { padding: 0.7rem 0.9rem; margin: 0; opacity: 0.8; font-size: 0.9rem; }
+.results h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin: 0.9rem 0.9rem 0.3rem;
+}
+
+.item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--edge);
+  padding: 0.7rem 0.9rem;
+  cursor: pointer;
+}
+.item:hover, .item:focus-visible { background: var(--muted); }
+.item .name { font-weight: 600; }
+.item .where, .item .when { font-size: 0.87rem; opacity: 0.8; }
+.item .distance { float: right; font-size: 0.85rem; opacity: 0.7; }
+
+/* ---- Popups ---- */
+
+.popup .name { font-weight: 700; font-size: 1rem; margin-bottom: 0.25rem; }
+.popup dl { margin: 0.35rem 0 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.5rem; }
+.popup dt { opacity: 0.7; }
+.popup dd { margin: 0; }
+.popup .actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; }
+.popup .actions a {
+  flex: 1;
+  text-align: center;
+  padding: 0.6rem 0.5rem;
+  border-radius: 0.4rem;
+  text-decoration: none;
+  font-weight: 600;
+  border: 1px solid var(--accent);
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.popup .actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.popup .caveat { margin-top: 0.5rem; font-size: 0.8rem; opacity: 0.75; }
+
+/* The Leaflet popup is cramped by default on a phone. */
+.leaflet-popup-content { margin: 0.75rem 0.9rem; min-width: 14rem; }
+
+/* Leaflet finds its marker images by reading this rule, falling back to guessing from
+   its own script URL. Stating it outright keeps the pins working wherever the site is
+   mounted. */
+.leaflet-default-icon-path { background-image: url("/assets/images/marker-icon.png"); }
+
+@media (min-width: 48rem) {
+  body.map { flex-direction: row; flex-wrap: wrap; }
+  .bar { width: 100%; }
+  #map { flex: 1 1 60%; height: auto; }
+  .results { flex: 1 1 20rem; max-width: 26rem; border-top: none; border-left: 1px solid var(--edge); }
+}

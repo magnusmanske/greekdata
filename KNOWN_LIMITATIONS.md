@@ -43,6 +43,34 @@ row. When the wrap crosses a *column* boundary, or when the source omits the clo
 
 Such names are still stored, and flagged as `suspicious_name` in `greekdata report`.
 
+## Hospital positions come from Wikidata, and not all of them are found
+
+**Status:** open by design. Roughly 30 of 43 hospital names get a position.
+
+Hospital rotas are names on a page — no addresses, no coordinates — so a hospital cannot
+be put on a map from the ministry's own data. `src/locate.rs` matches each name against
+Wikidata and copies the coordinates across. Because sending somebody to the wrong hospital
+is the worst thing this project could do, the matching is deliberately narrow:
+
+- only the distinctive part of the name is used — the words inside `«»`
+- only candidates inside an Attica bounding box are considered, which is what stops the
+  Athens `Ιπποκράτειο` matching the Thessaloniki one
+- a name matching more than one candidate is refused, not guessed
+  (`Σισμανόγλειο` matches two Wikidata items and is left unplaced)
+- an abbreviation ending in a stop may match as a prefix, so `ΑΓ.` matches `Άγιοι`
+
+What is left unplaced is mostly the split-name wreckage from the section above
+(`ΠΕΙΡΑΙΑΣ`, `ΕΕΣ»`), plus a few hospitals Wikidata does not have under a matchable Greek
+name. They still appear in the API and in a "position not known" list under the map.
+
+**How to find it:** `greekdata report --source wikidata` lists every placement as
+`located` with the item it came from, and every failure as `no_location` or
+`ambiguous_location`.
+
+**Auditing a placement:** each located hospital has a `wikidata` row in
+`entity_external_id`, and the map popup says the position did not come from the rota.
+Fixing the name variance problem above would also raise the match rate here.
+
 ## Worked around: pdf-extract reports the wrong glyph widths
 
 **Status:** worked around in `pdf::inline_indirect_glyph_widths`. Recheck on upgrade.

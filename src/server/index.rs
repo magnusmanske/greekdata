@@ -4,27 +4,9 @@
 //! cannot fall out of date. The sources list comes from the registered sources, so a new
 //! data group credits its publisher here automatically.
 
-use super::{AppState, EndpointDoc, Parameter};
+use super::{AppState, EndpointDoc, Parameter, Surface, escape};
 use axum::{extract::State, response::Html};
 use std::fmt::Write;
-
-const STYLE: &str = "\
-:root { color-scheme: light dark; }
-body { max-width: 46rem; margin: 0 auto; padding: 2rem 1rem 4rem;
-       font: 1rem/1.6 system-ui, sans-serif; }
-h1 { margin-bottom: 0.2rem; }
-.tagline { margin-top: 0; opacity: 0.75; }
-h2 { margin-top: 2.5rem; border-bottom: 1px solid rgba(128,128,128,0.35);
-     padding-bottom: 0.3rem; }
-code { font-family: ui-monospace, monospace; font-size: 0.9em; }
-.endpoint { margin-bottom: 1.5rem; }
-.endpoint code.path { font-size: 1rem; font-weight: 600; }
-.params { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; opacity: 0.85; }
-.source { margin-bottom: 0.9rem; }
-.disclaimer { border: 1px solid rgba(128,128,128,0.4); border-radius: 0.4rem;
-              padding: 0.8rem 1rem; background: rgba(128,128,128,0.08); }
-footer { margin-top: 3rem; font-size: 0.85rem; opacity: 0.7; }
-";
 
 pub async fn index(State(state): State<AppState>) -> Html<String> {
     Html(render(&state.endpoints))
@@ -37,8 +19,8 @@ fn render(endpoints: &[EndpointDoc]) -> String {
     page.push_str("<meta charset=\"utf-8\">\n");
     page.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     page.push_str("<title>greekdata</title>\n");
-    let _ = writeln!(page, "<style>{STYLE}</style>");
-    page.push_str("</head>\n<body>\n");
+    page.push_str("<link rel=\"stylesheet\" href=\"/assets/site.css\">\n");
+    page.push_str("</head>\n<body class=\"prose\">\n");
 
     page.push_str("<h1>greekdata</h1>\n");
     page.push_str(
@@ -59,12 +41,35 @@ fn render(endpoints: &[EndpointDoc]) -> String {
          corrections, the earlier version stays in the database and the corrected one is \
          served.</p>\n",
     );
+    page.push_str(
+        "<p>The maps below plot what is on duty today, and will route you there. \
+         Pharmacy positions are published with the roster itself. Hospital rotas give \
+         only names, so those positions are matched in from Wikidata where they can be \
+         found unambiguously — a popup says so when that is the case, and a hospital \
+         with no confident position is listed under the map rather than pinned to a \
+         guess.</p>\n",
+    );
 
-    page.push_str("<h2>Available endpoints</h2>\n");
+    page.push_str("<h2>Maps</h2>\n");
+    page.push_str("<div class=\"maplinks\">\n");
+    for endpoint in endpoints.iter().filter(|e| e.surface == Surface::Page) {
+        let _ = writeln!(
+            page,
+            "<a href=\"{}\">{}</a>",
+            escape(&endpoint.path),
+            escape(&page_label(&endpoint.path))
+        );
+    }
+    page.push_str("</div>\n");
+    for endpoint in endpoints.iter().filter(|e| e.surface == Surface::Page) {
+        render_endpoint(&mut page, endpoint);
+    }
+
+    page.push_str("<h2>API</h2>\n");
     page.push_str(
         "<p>All responses are JSON, so any of these can also be saved as a data file.</p>\n",
     );
-    for endpoint in endpoints {
+    for endpoint in endpoints.iter().filter(|e| e.surface == Surface::Api) {
         render_endpoint(&mut page, endpoint);
     }
 
@@ -78,6 +83,11 @@ fn render(endpoints: &[EndpointDoc]) -> String {
          source documents are written by hand and are frequently inconsistent or \
          mistaken, and the automated reading of them can introduce further errors. The \
          output may therefore be incomplete, out of date, or simply wrong.</p>\n",
+    );
+    page.push_str(
+        "<p>Positions shown on the maps, and the routes offered from them, may be wrong: \
+         hospital positions in particular are matched from a third-party source and are \
+         not part of what the ministry published.</p>\n",
     );
     page.push_str(
         "<p>No legal responsibility is accepted for the output or for anything done on \
@@ -98,6 +108,16 @@ fn render(endpoints: &[EndpointDoc]) -> String {
     page.push_str("</body>\n</html>\n");
 
     page
+}
+
+/// A button label for a page path: `/pharmacies` reads better as "Pharmacies".
+fn page_label(path: &str) -> String {
+    let name = path.trim_start_matches('/');
+    let mut characters = name.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+        None => name.to_string(),
+    }
 }
 
 fn render_endpoint(page: &mut String, endpoint: &EndpointDoc) {
@@ -167,26 +187,6 @@ fn prose(text: &str) -> String {
     out
 }
 
-/// Escapes text for HTML.
-///
-/// Everything on this page comes from the source code rather than from a request, but
-/// escaping is applied anyway: the moment something here becomes user- or data-derived,
-/// forgetting it would be an injection.
-fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,13 +237,5 @@ mod tests {
         // An unpaired backtick must not swallow the rest of the text.
         assert_eq!(prose("a ` dangling tick"), "a ` dangling tick");
         assert_eq!(prose("no ticks at all"), "no ticks at all");
-    }
-
-    #[test]
-    fn markup_in_text_is_escaped() {
-        assert_eq!(
-            escape("<script>alert('x' & \"y\")</script>"),
-            "&lt;script&gt;alert(&#39;x&#39; &amp; &quot;y&quot;)&lt;/script&gt;"
-        );
     }
 }

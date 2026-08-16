@@ -51,7 +51,13 @@ enum Command {
         days: Option<u16>,
     },
 
-    /// Serve the read-only HTTP API.
+    /// Find coordinates for stored places that arrived without any.
+    ///
+    /// Hospital rotas are name-only, so their positions are matched in from Wikidata.
+    /// Only unambiguous matches inside Attica are accepted; the rest are reported.
+    Locate,
+
+    /// Serve the read-only HTTP API and website.
     Serve,
 
     /// Show data problems recorded during ingest.
@@ -102,6 +108,15 @@ async fn run() -> Result<()> {
         } => {
             let ctx = Ctx::open(&config, policy).await?;
             ingest(&ctx, source.as_deref(), window(from, to, days)).await
+        }
+        Command::Locate => {
+            let ctx = Ctx::open(&config, policy).await?;
+            let report = greekdata::locate::hospitals(&ctx).await?;
+            println!(
+                "located {}, ambiguous {}, no match {}",
+                report.located, report.ambiguous, report.unmatched
+            );
+            Ok(())
         }
         Command::Serve => {
             let db = Db::open(&config.database_url).await?;
