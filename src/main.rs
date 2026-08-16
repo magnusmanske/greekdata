@@ -11,6 +11,7 @@ use greekdata::{
     update,
 };
 use jiff::civil::Date;
+use std::net::SocketAddr;
 
 #[derive(Parser)]
 #[command(
@@ -68,6 +69,18 @@ enum Command {
     ///
     /// The server refreshes its data in the background while it runs.
     Serve {
+        /// Port to listen on. Overrides the port in `--bind`.
+        #[arg(long, short)]
+        port: Option<u16>,
+
+        /// Address to listen on, as `host:port`.
+        ///
+        /// Defaults to 127.0.0.1:3000, which is reachable only from this machine. Use
+        /// 0.0.0.0 to accept connections from elsewhere. Also settable with
+        /// GREEKDATA_BIND.
+        #[arg(long, value_name = "ADDRESS")]
+        bind: Option<SocketAddr>,
+
         /// Minutes between background refreshes. 0 turns them off.
         #[arg(long, value_name = "MINUTES")]
         update_interval: Option<u64>,
@@ -137,8 +150,20 @@ async fn run() -> Result<()> {
             );
             Ok(())
         }
-        Command::Serve { update_interval } => {
+        Command::Serve {
+            port,
+            bind,
+            update_interval,
+        } => {
             let mut config = config;
+            if let Some(address) = bind {
+                config.bind = address;
+            }
+            // Applied after `--bind` so the two compose: the address chooses the
+            // interface, the port overrides whichever port that address carried.
+            if let Some(port) = port {
+                config.bind.set_port(port);
+            }
             if let Some(minutes) = update_interval {
                 config.update_interval = greekdata::config::update_interval(minutes);
             }
