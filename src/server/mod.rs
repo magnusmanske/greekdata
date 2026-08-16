@@ -184,6 +184,9 @@ fn endpoints() -> Vec<Endpoint> {
 pub struct AppState {
     pub db: Db,
     pub endpoints: Arc<Vec<EndpointDoc>>,
+    /// How often this deployment refreshes its data, so the site can say so rather
+    /// than leaving a reader to guess how stale what they see might be.
+    pub refresh: Option<Duration>,
 }
 
 /// Builds the router. Separate from [`serve`] so tests can drive it without a socket.
@@ -218,6 +221,7 @@ pub fn router(config: &Config, db: Db) -> Router {
         .with_state(AppState {
             db,
             endpoints: Arc::new(documented),
+            refresh: config.update_interval,
         })
 }
 
@@ -226,10 +230,32 @@ pub async fn serve(config: Config, db: Db) -> Result<()> {
         .await
         .map_err(|source| crate::Error::io(config.bind.to_string(), source))?;
 
+    // The updater runs beside the server rather than inside a request, so a slow source
+    // cannot hold up a reader and a failing one cannot bring the site down.
+    let updater = config.update_interval.map(|interval| {
+        tracing::info!(
+            every_minutes = interval.as_secs() / 60,
+            "refreshing data in the background"
+        );
+        tokio::spawn(crate::update::run_forever(
+            config.clone(),
+            db.clone(),
+            interval,
+        ))
+    });
+    if updater.is_none() {
+        tracing::info!("background updating is off; run `greekdata ingest` to refresh");
+    }
+
     tracing::info!(address = %config.bind, "serving");
-    axum::serve(listener, router(&config, db))
+    let outcome = axum::serve(listener, router(&config, db))
         .await
-        .map_err(|source| crate::Error::io("http server", source))
+        .map_err(|source| crate::Error::io("http server", source));
+
+    if let Some(updater) = updater {
+        updater.abort();
+    }
+    outcome
 }
 
 /// Cross-origin access is opt-in: an unconfigured deployment allows no browser origins.

@@ -147,9 +147,16 @@ pub struct Ctx {
 
 impl Ctx {
     pub async fn open(config: &Config, policy: CachePolicy) -> Result<Self> {
+        let db = Db::open(&config.database_url).await?;
+        Self::with_db(config, policy, db)
+    }
+
+    /// Shares an already-open database, so the server's background updater does not
+    /// open a second pool onto the same file.
+    pub fn with_db(config: &Config, policy: CachePolicy, db: Db) -> Result<Self> {
         Ok(Self {
             fetcher: Fetcher::new(config, policy)?,
-            db: Db::open(&config.database_url).await?,
+            db,
         })
     }
 

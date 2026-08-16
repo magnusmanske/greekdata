@@ -16,6 +16,9 @@ pub struct Config {
     pub bind: SocketAddr,
     /// Origins allowed to call the API from a browser. Empty means same-origin only.
     pub cors_origins: Vec<String>,
+    /// How often the running server refreshes its data in the background.
+    /// `None` leaves updating to the command line.
+    pub update_interval: Option<Duration>,
 }
 
 const DEFAULT_USER_AGENT: &str = concat!(
@@ -33,6 +36,7 @@ impl Default for Config {
             request_delay: Duration::from_millis(1500),
             bind: SocketAddr::from(([127, 0, 0, 1], 3000)),
             cors_origins: Vec::new(),
+            update_interval: Some(Duration::from_secs(3 * 60 * 60)),
         }
     }
 }
@@ -71,6 +75,20 @@ impl Config {
                 .collect();
         }
 
+        if let Ok(minutes) = env::var("GREEKDATA_UPDATE_INTERVAL_MINUTES") {
+            let minutes: u64 = minutes.parse().map_err(|_| {
+                Error::Config(format!(
+                    "GREEKDATA_UPDATE_INTERVAL_MINUTES is not a number: {minutes}"
+                ))
+            })?;
+            config.update_interval = update_interval(minutes);
+        }
+
         Ok(config)
     }
+}
+
+/// Zero minutes turns background updating off; anything else is a period.
+pub fn update_interval(minutes: u64) -> Option<Duration> {
+    (minutes > 0).then(|| Duration::from_secs(minutes * 60))
 }

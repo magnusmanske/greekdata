@@ -7,12 +7,13 @@
 use super::{AppState, EndpointDoc, Parameter, Surface, escape};
 use axum::{extract::State, response::Html};
 use std::fmt::Write;
+use std::time::Duration;
 
 pub async fn index(State(state): State<AppState>) -> Html<String> {
-    Html(render(&state.endpoints))
+    Html(render(&state.endpoints, state.refresh))
 }
 
-fn render(endpoints: &[EndpointDoc]) -> String {
+fn render(endpoints: &[EndpointDoc], refresh: Option<Duration>) -> String {
     let mut page = String::with_capacity(8 * 1024);
 
     page.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
@@ -101,13 +102,34 @@ fn render(endpoints: &[EndpointDoc]) -> String {
     );
     page.push_str("</div>\n");
 
-    page.push_str(
-        "<footer>Data is refreshed from the sources above; each record carries the date \
-         of the document it came from.</footer>\n",
+    let _ = writeln!(
+        page,
+        "<footer>{} Each record carries the date of the document it came from.</footer>",
+        match refresh {
+            Some(interval) => format!(
+                "Data is refreshed from the sources above {}.",
+                every(interval)
+            ),
+            None => "Data is refreshed from the sources above when an operator runs the \
+                     updater."
+                .to_string(),
+        }
     );
     page.push_str("</body>\n</html>\n");
 
     page
+}
+
+/// "every three hours", "every 30 minutes" — how often this deployment refreshes.
+fn every(interval: Duration) -> String {
+    let minutes = interval.as_secs() / 60;
+    match (minutes / 60, minutes % 60) {
+        (0, 1) => "every minute".to_string(),
+        (0, m) => format!("every {m} minutes"),
+        (1, 0) => "hourly".to_string(),
+        (h, 0) => format!("every {h} hours"),
+        (h, m) => format!("every {h}h {m}m"),
+    }
 }
 
 /// A button label for a page path: `/pharmacies` reads better as "Pharmacies".
@@ -193,7 +215,23 @@ mod tests {
 
     fn page() -> String {
         let endpoints: Vec<EndpointDoc> = super::super::endpoint_docs();
-        render(&endpoints)
+        render(&endpoints, Some(Duration::from_secs(3 * 60 * 60)))
+    }
+
+    #[test]
+    fn the_page_states_how_often_the_data_is_refreshed() {
+        assert!(page().contains("every 3 hours"));
+
+        let manual = render(&super::super::endpoint_docs(), None);
+        assert!(manual.contains("when an operator runs the updater"));
+    }
+
+    #[test]
+    fn refresh_intervals_read_as_english() {
+        assert_eq!(every(Duration::from_secs(3 * 60 * 60)), "every 3 hours");
+        assert_eq!(every(Duration::from_secs(60 * 60)), "hourly");
+        assert_eq!(every(Duration::from_secs(30 * 60)), "every 30 minutes");
+        assert_eq!(every(Duration::from_secs(90 * 60)), "every 1h 30m");
     }
 
     #[test]

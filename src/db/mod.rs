@@ -5,7 +5,7 @@ pub mod query;
 
 use crate::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 /// A pooled handle to the database, with the schema already migrated.
 #[derive(Debug, Clone)]
@@ -19,7 +19,11 @@ impl Db {
         let options = SqliteConnectOptions::from_str(url)?
             .create_if_missing(true)
             .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal);
+            // Write-ahead logging lets the server keep reading while the background
+            // updater writes; the timeout covers the moments a writer needs the lock
+            // outright, so a refresh never fails a request or itself over contention.
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(15));
 
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
         sqlx::migrate!("./migrations").run(&pool).await?;

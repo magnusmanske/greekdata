@@ -8,6 +8,7 @@ use greekdata::{
     db::{Db, query},
     server,
     sources::{self, Ctx, DateWindow, WhenUnchanged},
+    update,
 };
 use jiff::civil::Date;
 
@@ -64,7 +65,13 @@ enum Command {
     Locate,
 
     /// Serve the read-only HTTP API and website.
-    Serve,
+    ///
+    /// The server refreshes its data in the background while it runs.
+    Serve {
+        /// Minutes between background refreshes. 0 turns them off.
+        #[arg(long, value_name = "MINUTES")]
+        update_interval: Option<u64>,
+    },
 
     /// Show data problems recorded during ingest.
     Report {
@@ -130,7 +137,11 @@ async fn run() -> Result<()> {
             );
             Ok(())
         }
-        Command::Serve => {
+        Command::Serve { update_interval } => {
+            let mut config = config;
+            if let Some(minutes) = update_interval {
+                config.update_interval = greekdata::config::update_interval(minutes);
+            }
             let db = Db::open(&config.database_url).await?;
             server::serve(config, db).await
         }
@@ -173,24 +184,23 @@ async fn ingest(
         None => sources::all(),
     };
 
-    for source in selected {
-        tracing::info!(
-            source = source.id(),
-            from = %window.from,
-            to = %window.to,
-            "ingesting"
-        );
-        let report = sources::ingest(ctx, source.as_ref(), window, unchanged).await?;
+    let summary = update::run_once(ctx, &selected, window, unchanged).await?;
+    for (id, report) in &summary.sources {
         println!(
-            "{}: {} documents, {} entities, {} properties, \
+            "{id}: {} documents, {} entities, {} properties, \
              {} unchanged, {} warnings, {} failed",
-            source.id(),
             report.documents,
             report.entities,
             report.properties,
             report.skipped,
             report.warnings,
             report.failed
+        );
+    }
+    if let Some(located) = summary.located {
+        println!(
+            "located: {} placed, {} ambiguous, {} without a match",
+            located.located, located.ambiguous, located.unmatched
         );
     }
 

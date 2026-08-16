@@ -13,5 +13,6 @@ pub mod model;
 pub mod pdf;
 pub mod server;
 pub mod sources;
+pub mod update;
 
 pub use error::{Error, Result};
