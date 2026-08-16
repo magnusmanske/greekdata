@@ -11,6 +11,10 @@ Prefer official government data sources whenever possible. Use primary sources w
 - List of open pharmacies in Greece, especially in the night/on weekends and public holidays.
 - List of hospitals on call in Greece, especially in the night/on weekends and public holidays.
 
+## Project notes
+- Known problems with the data and with our handling of it live in `KNOWN_LIMITATIONS.md`. Add to it rather than rediscovering the same thing later.
+- The website's list of available functions and downloads must stay current. It is rendered from `server::endpoints()`, which also builds the router, so add new functionality there and it documents itself.
+
 ## Hard rules
 - **Do not mention AI agents in commit messages.**
 - **`git commit` is pre-authorized; `git push` is not.** Use sensible commit groupings for larger changes.
