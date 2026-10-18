@@ -25,6 +25,9 @@ use serde::Deserialize;
 /// coordinates came from.
 pub const LOCATION_SOURCE: &str = "wikidata";
 
+/// WDQS v1 (Blazegraph). The query is plain SPARQL, so it also runs on v2 (QLever,
+/// `query-next.wikidata.org`), which refuses user agents it has not allow-listed until
+/// its public launch.
 const ENDPOINT: &str = "https://query.wikidata.org/sparql";
 
 /// Hospitals in Greece that have coordinates, with their Greek names and aliases.
@@ -317,9 +320,14 @@ pub fn parse_candidates(json: &str) -> Result<Vec<Candidate>> {
     Ok(candidates)
 }
 
-/// `Point(23.7554 37.98018)` is longitude then latitude, in that order.
+/// `Point(23.7554 37.98018)` is longitude then latitude, in that order. WDQS v1 writes
+/// `Point(`, v2 `POINT(`.
 fn parse_point(literal: &str) -> Option<(f64, f64)> {
-    let inside = literal.trim().strip_prefix("Point(")?.strip_suffix(')')?;
+    let (keyword, rest) = literal.trim().split_at_checked(6)?;
+    if !keyword.eq_ignore_ascii_case("point(") {
+        return None;
+    }
+    let inside = rest.strip_suffix(')')?;
     let (lon, lat) = inside.split_once(' ')?;
     Some((lat.trim().parse().ok()?, lon.trim().parse().ok()?))
 }
@@ -431,7 +439,12 @@ mod tests {
             parse_point("Point(23.7554 37.98018)"),
             Some((37.98018, 23.7554))
         );
+        assert_eq!(
+            parse_point("POINT(23.7554 37.98018)"),
+            Some((37.98018, 23.7554))
+        );
         assert_eq!(parse_point("Point(23.7554)"), None);
+        assert_eq!(parse_point("Pöint(1 2)"), None);
         assert_eq!(parse_point("somewhere"), None);
     }
 
