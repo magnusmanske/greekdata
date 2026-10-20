@@ -19,7 +19,12 @@ use crate::{
     model::{EntityKind, Severity, Warning},
     sources::Ctx,
 };
-use serde::Deserialize;
+use wikimisc::{
+    entity_id::ItemId,
+    lat_lon::{BoundingBox, LatLon},
+    sparql_results::SparqlApiResult,
+    sparql_value::SparqlValue,
+};
 
 /// Recorded against a located entity so the API and the map can say where the
 /// coordinates came from.
@@ -41,25 +46,12 @@ const QUERY: &str = r#"SELECT ?item ?label ?alias ?coord WHERE {
 
 /// Attica, generously. Restricting candidates to the region the rota covers is what
 /// stops an Athens hospital matching its Thessaloniki namesake.
-const ATTICA: Bounds = Bounds {
+const ATTICA: BoundingBox = BoundingBox {
     min_lat: 37.5,
     max_lat: 38.4,
     min_lon: 23.0,
     max_lon: 24.2,
 };
-
-struct Bounds {
-    min_lat: f64,
-    max_lat: f64,
-    min_lon: f64,
-    max_lon: f64,
-}
-
-impl Bounds {
-    fn contains(&self, lat: f64, lon: f64) -> bool {
-        (self.min_lat..=self.max_lat).contains(&lat) && (self.min_lon..=self.max_lon).contains(&lon)
-    }
-}
 
 /// What a locating run did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -72,10 +64,9 @@ pub struct LocateReport {
 /// A place Wikidata knows the position of.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
-    pub qid: String,
+    pub qid: ItemId,
     pub names: Vec<String>,
-    pub lat: f64,
-    pub lon: f64,
+    pub location: LatLon,
 }
 
 /// Gives coordinates to stored hospitals that have none.
@@ -87,7 +78,7 @@ pub async fn hospitals(ctx: &Ctx) -> Result<LocateReport> {
     let candidates = parse_candidates(&response.text())?;
     let inside: Vec<Candidate> = candidates
         .into_iter()
-        .filter(|candidate| ATTICA.contains(candidate.lat, candidate.lon))
+        .filter(|candidate| ATTICA.contains(&candidate.location))
         .collect();
     tracing::info!(candidates = inside.len(), "wikidata hospitals in Attica");
 
@@ -111,7 +102,7 @@ pub async fn hospitals(ctx: &Ctx) -> Result<LocateReport> {
                     "located",
                     format!(
                         "`{name}` placed at {}, {} from wikidata:{}",
-                        candidate.lat, candidate.lon, candidate.qid
+                        candidate.location.lat, candidate.location.lon, candidate.qid
                     ),
                 ));
             }
@@ -141,8 +132,8 @@ async fn set_location(db: &Db, entity_id: i64, candidate: &Candidate) -> Result<
     let mut tx = db.pool().begin().await?;
 
     sqlx::query("UPDATE entity SET lat = ?1, lon = ?2, location_source = ?3 WHERE id = ?4")
-        .bind(candidate.lat)
-        .bind(candidate.lon)
+        .bind(candidate.location.lat)
+        .bind(candidate.location.lon)
         .bind(LOCATION_SOURCE)
         .bind(entity_id)
         .execute(&mut *tx)
@@ -155,7 +146,7 @@ async fn set_location(db: &Db, entity_id: i64, candidate: &Candidate) -> Result<
     )
     .bind(entity_id)
     .bind(LOCATION_SOURCE)
-    .bind(&candidate.qid)
+    .bind(candidate.qid.to_string())
     .execute(&mut *tx)
     .await?;
 
@@ -167,7 +158,7 @@ async fn set_location(db: &Db, entity_id: i64, candidate: &Candidate) -> Result<
 #[derive(Debug, PartialEq)]
 enum Match<'a> {
     One(&'a Candidate),
-    Several(Vec<&'a str>),
+    Several(Vec<ItemId>),
     None,
 }
 
@@ -190,7 +181,7 @@ fn resolve<'a>(name: &str, candidates: &'a [Candidate]) -> Match<'a> {
     match hits.as_slice() {
         [only] => Match::One(only),
         [] => Match::None,
-        several => Match::Several(several.iter().map(|c| c.qid.as_str()).collect()),
+        several => Match::Several(several.iter().map(|c| c.qid).collect()),
     }
 }
 
@@ -255,42 +246,20 @@ fn query_url() -> String {
     )
 }
 
-/// The subset of the SPARQL JSON results we need.
-#[derive(Deserialize)]
-struct SparqlResponse {
-    results: SparqlResults,
-}
-
-#[derive(Deserialize)]
-struct SparqlResults {
-    bindings: Vec<SparqlBinding>,
-}
-
-#[derive(Deserialize)]
-struct SparqlBinding {
-    item: SparqlValue,
-    #[serde(default)]
-    label: Option<SparqlValue>,
-    #[serde(default)]
-    alias: Option<SparqlValue>,
-    coord: SparqlValue,
-}
-
-#[derive(Deserialize)]
-struct SparqlValue {
-    value: String,
-}
-
 /// Folds the SPARQL rows, one per name, into one candidate per item.
 pub fn parse_candidates(json: &str) -> Result<Vec<Candidate>> {
-    let response: SparqlResponse = serde_json::from_str(json)?;
+    let response: SparqlApiResult = serde_json::from_str(json)?;
     let mut candidates: Vec<Candidate> = Vec::new();
 
-    for binding in response.results.bindings {
-        let Some(qid) = binding.item.value.rsplit('/').next().map(String::from) else {
+    for row in response.bindings() {
+        let Some(qid) = row
+            .get("item")
+            .and_then(SparqlValue::entity_id)
+            .and_then(|id| id.as_item())
+        else {
             continue;
         };
-        let Some((lat, lon)) = parse_point(&binding.coord.value) else {
+        let Some(SparqlValue::Location(location)) = row.get("coord") else {
             continue;
         };
 
@@ -301,8 +270,7 @@ pub fn parse_candidates(json: &str) -> Result<Vec<Candidate>> {
                 candidates.push(Candidate {
                     qid,
                     names: Vec::new(),
-                    lat,
-                    lon,
+                    location: location.clone(),
                 });
                 candidates.last_mut().ok_or_else(|| {
                     Error::parse("wikidata", "candidate vanished after being pushed")
@@ -310,26 +278,16 @@ pub fn parse_candidates(json: &str) -> Result<Vec<Candidate>> {
             }
         };
 
-        for name in [binding.label, binding.alias].into_iter().flatten() {
-            if !candidate.names.contains(&name.value) {
-                candidate.names.push(name.value);
+        for name in [row.get("label"), row.get("alias")].into_iter().flatten() {
+            if let SparqlValue::Literal(name) = name
+                && !candidate.names.contains(name)
+            {
+                candidate.names.push(name.clone());
             }
         }
     }
 
     Ok(candidates)
-}
-
-/// `Point(23.7554 37.98018)` is longitude then latitude, in that order. WDQS v1 writes
-/// `Point(`, v2 `POINT(`.
-fn parse_point(literal: &str) -> Option<(f64, f64)> {
-    let (keyword, rest) = literal.trim().split_at_checked(6)?;
-    if !keyword.eq_ignore_ascii_case("point(") {
-        return None;
-    }
-    let inside = rest.strip_suffix(')')?;
-    let (lon, lat) = inside.split_once(' ')?;
-    Some((lat.trim().parse().ok()?, lon.trim().parse().ok()?))
 }
 
 #[cfg(test)]
@@ -338,10 +296,9 @@ mod tests {
 
     fn candidate(qid: &str, names: &[&str]) -> Candidate {
         Candidate {
-            qid: qid.into(),
+            qid: qid.parse().expect("a valid item ID"),
             names: names.iter().map(|name| name.to_string()).collect(),
-            lat: 37.98,
-            lon: 23.75,
+            location: LatLon::new(37.98, 23.75),
         }
     }
 
@@ -363,7 +320,7 @@ mod tests {
 
     fn matched(name: &str) -> Option<String> {
         match resolve(name, &attica()) {
-            Match::One(candidate) => Some(candidate.qid.clone()),
+            Match::One(candidate) => Some(candidate.qid.to_string()),
             _ => None,
         }
     }
@@ -428,44 +385,77 @@ mod tests {
     #[test]
     fn attica_bounds_exclude_the_rest_of_greece() {
         // Athens is in; Thessaloniki and Heraklion are not.
-        assert!(ATTICA.contains(37.98, 23.73));
-        assert!(!ATTICA.contains(40.64, 22.94));
-        assert!(!ATTICA.contains(35.34, 25.14));
+        assert!(ATTICA.contains(&LatLon::new(37.98, 23.73)));
+        assert!(!ATTICA.contains(&LatLon::new(40.64, 22.94)));
+        assert!(!ATTICA.contains(&LatLon::new(35.34, 25.14)));
     }
 
-    #[test]
-    fn coordinates_are_read_longitude_first() {
-        assert_eq!(
-            parse_point("Point(23.7554 37.98018)"),
-            Some((37.98018, 23.7554))
-        );
-        assert_eq!(
-            parse_point("POINT(23.7554 37.98018)"),
-            Some((37.98018, 23.7554))
-        );
-        assert_eq!(parse_point("Point(23.7554)"), None);
-        assert_eq!(parse_point("Pöint(1 2)"), None);
-        assert_eq!(parse_point("somewhere"), None);
+    /// One WDQS result row, as the endpoint writes it.
+    fn row(item: &str, name: Option<(&str, &str)>, coord: &str) -> String {
+        let name = name.map_or(String::new(), |(var, text)| {
+            format!(r#""{var}":{{"xml:lang":"el","type":"literal","value":"{text}"}},"#)
+        });
+        format!(
+            r#"{{"item":{{"type":"uri","value":"{item}"}},{name}
+               "coord":{{"datatype":"http://www.opengis.net/ont/geosparql#wktLiteral",
+                         "type":"literal","value":"{coord}"}}}}"#
+        )
+    }
+
+    fn response(rows: &[String]) -> String {
+        format!(
+            r#"{{"head":{{"vars":["item","label","alias","coord"]}},
+                "results":{{"bindings":[{}]}}}}"#,
+            rows.join(",")
+        )
     }
 
     #[test]
     fn sparql_rows_fold_into_one_candidate_per_item() {
-        let json = r#"{"results":{"bindings":[
-            {"item":{"value":"http://www.wikidata.org/entity/Q7"},
-             "label":{"value":"Νοσοκομείο Παμμακάριστος"},
-             "coord":{"value":"Point(23.73158 38.01425)"}},
-            {"item":{"value":"http://www.wikidata.org/entity/Q7"},
-             "alias":{"value":"Παμμακάριστος"},
-             "coord":{"value":"Point(23.73158 38.01425)"}}
-        ]}}"#;
+        let item = "http://www.wikidata.org/entity/Q7";
+        let coord = "Point(23.73158 38.01425)";
+        let json = response(&[
+            row(item, Some(("label", "Νοσοκομείο Παμμακάριστος")), coord),
+            row(item, Some(("alias", "Παμμακάριστος")), coord),
+        ]);
 
-        let candidates = parse_candidates(json).expect("parses");
+        let candidates = parse_candidates(&json).expect("parses");
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].qid, "Q7");
         assert_eq!(
             candidates[0].names,
             ["Νοσοκομείο Παμμακάριστος", "Παμμακάριστος"]
         );
-        assert!((candidates[0].lat - 38.01425).abs() < 1e-6);
+        // WKT is longitude first.
+        assert!((candidates[0].location.lat - 38.01425).abs() < 1e-6);
+        assert!((candidates[0].location.lon - 23.73158).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rows_without_an_item_or_a_point_are_skipped() {
+        let json = response(&[
+            // QLever's spelling is read too.
+            row(
+                "http://www.wikidata.org/entity/Q1",
+                None,
+                "POINT(23.7 37.9)",
+            ),
+            row(
+                "http://www.wikidata.org/entity/P2",
+                None,
+                "Point(23.7 37.9)",
+            ),
+            row("http://example.org/Q3", None, "Point(23.7 37.9)"),
+            row("http://www.wikidata.org/entity/Q4", None, "Point(23.7)"),
+            row(
+                "http://www.wikidata.org/entity/Q5",
+                None,
+                "<http://www.wikidata.org/entity/Q405> Point(23.7 37.9)",
+            ),
+        ]);
+
+        let candidates = parse_candidates(&json).expect("parses");
+        let qids: Vec<String> = candidates.iter().map(|c| c.qid.to_string()).collect();
+        assert_eq!(qids, ["Q1"]);
     }
 }

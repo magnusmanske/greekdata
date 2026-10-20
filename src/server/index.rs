@@ -4,10 +4,11 @@
 //! cannot fall out of date. The sources list comes from the registered sources, so a new
 //! data group credits its publisher here automatically.
 
-use super::{AppState, EndpointDoc, Parameter, Surface, escape};
+use super::{AppState, EndpointDoc, Parameter, Surface};
 use axum::{extract::State, response::Html};
 use std::fmt::Write;
 use std::time::Duration;
+use wikimisc::escape::html as escape;
 
 pub async fn index(State(state): State<AppState>) -> Html<String> {
     Html(render(&state.endpoints, state.refresh))
@@ -192,7 +193,7 @@ fn render_sources(page: &mut String) {
 fn prose(text: &str) -> String {
     let escaped = escape(text);
     let mut out = String::with_capacity(escaped.len());
-    let mut rest = escaped.as_str();
+    let mut rest: &str = &escaped;
 
     while let Some((before, after)) = rest.split_once('`') {
         let Some((code, remainder)) = after.split_once('`') else {
@@ -239,7 +240,7 @@ mod tests {
         let rendered = page();
         for endpoint in super::super::endpoint_docs() {
             assert!(
-                rendered.contains(&escape(&endpoint.path)),
+                rendered.contains(&*escape(&endpoint.path)),
                 "{} is missing from the page",
                 endpoint.path
             );
@@ -251,7 +252,7 @@ mod tests {
         let rendered = page();
         for source in crate::sources::all() {
             assert!(
-                rendered.contains(&escape(source.attribution().publisher)),
+                rendered.contains(&*escape(source.attribution().publisher)),
                 "{} is not credited",
                 source.id()
             );

@@ -5,10 +5,10 @@
 //! page shows is carried in `data-` attributes, because the content security policy
 //! allows no inline script.
 
-use super::escape;
 use crate::{model::EntityKind, sources};
 use axum::response::Html;
 use std::fmt::Write;
+use wikimisc::escape::html as escape;
 
 /// A map page: which kind of place it plots, and how to describe it.
 pub struct MapPage {

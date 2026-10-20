@@ -100,11 +100,8 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("GREEKDATA_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+    wikimisc::logging::Logging::new()
+        .env_var("GREEKDATA_LOG")
         .init();
 
     match run().await {

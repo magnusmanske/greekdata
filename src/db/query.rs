@@ -7,12 +7,11 @@ use crate::{Result, db::Db, model::EntityKind};
 use jiff::civil::Date;
 use serde::Serialize;
 use sqlx::FromRow;
+use wikimisc::lat_lon::{BoundingBox, LatLon};
 
 /// Hard ceilings, so a hostile or careless query cannot ask for the whole database.
 pub const MAX_LIMIT: i64 = 500;
 pub const MAX_RADIUS_KM: f64 = 50.0;
-
-const EARTH_RADIUS_KM: f64 = 6371.0;
 
 /// An entity together with one thing that is true of it on a given day.
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -127,9 +126,10 @@ pub async fn on_call(db: &Db, query: &OnCallQuery) -> Result<Vec<OnCallRow>> {
     .await?;
 
     if let Some(near) = query.near {
+        let centre = LatLon::new(near.lat, near.lon);
         for row in &mut rows {
             row.distance_km = match (row.lat, row.lon) {
-                (Some(lat), Some(lon)) => Some(distance_km(near.lat, near.lon, lat, lon)),
+                (Some(lat), Some(lon)) => Some(centre.distance_km(&LatLon::new(lat, lon))),
                 _ => None,
             };
         }
@@ -207,52 +207,16 @@ fn serialize_json_text<S: serde::Serializer>(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BoundingBox {
-    min_lat: f64,
-    max_lat: f64,
-    min_lon: f64,
-    max_lon: f64,
-}
-
-/// A generous box around a point, used only to let the index discard distant rows.
+/// A box around a point, used only to let the index discard distant rows.
 fn bounding_box(near: Near) -> BoundingBox {
     let radius = near.radius_km.clamp(0.0, MAX_RADIUS_KM);
-    let lat_span = radius / 111.0;
-    // Longitude degrees shrink towards the poles; guard the division near them.
-    let lon_span = radius / (111.0 * near.lat.to_radians().cos().abs().max(0.01));
-
-    BoundingBox {
-        min_lat: near.lat - lat_span,
-        max_lat: near.lat + lat_span,
-        min_lon: near.lon - lon_span,
-        max_lon: near.lon + lon_span,
-    }
-}
-
-/// Great-circle distance between two points, in kilometres.
-fn distance_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let (phi1, phi2) = (lat1.to_radians(), lat2.to_radians());
-    let delta_phi = (lat2 - lat1).to_radians();
-    let delta_lambda = (lon2 - lon1).to_radians();
-
-    let a = (delta_phi / 2.0).sin().powi(2)
-        + phi1.cos() * phi2.cos() * (delta_lambda / 2.0).sin().powi(2);
-
-    2.0 * EARTH_RADIUS_KM * a.sqrt().asin()
+    BoundingBox::around(&LatLon::new(near.lat, near.lon), radius)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn distance_matches_a_known_separation() {
-        // Syntagma Square to Piraeus port is about 8 km.
-        let km = distance_km(37.9755, 23.7348, 37.9420, 23.6465);
-        assert!((7.0..9.5).contains(&km), "got {km} km");
-        assert_eq!(distance_km(37.9755, 23.7348, 37.9755, 23.7348), 0.0);
-    }
+    use wikimisc::lat_lon::EARTH_RADIUS_KM;
 
     #[test]
     fn the_bounding_box_contains_the_radius() {
@@ -263,10 +227,21 @@ mod tests {
         };
         let bounds = bounding_box(near);
 
-        // A point due north at exactly the radius must fall inside the box.
-        assert!(bounds.max_lat > near.lat + 4.9 / 111.0);
-        assert!(bounds.min_lon < near.lon);
-        assert!(bounds.max_lon > near.lon);
+        // Points due north and due east at exactly the radius must fall inside the box.
+        let centre = LatLon::new(near.lat, near.lon);
+        let angle = near.radius_km / EARTH_RADIUS_KM;
+        let east = 2.0 * ((angle / 2.0).sin() / near.lat.to_radians().cos()).asin();
+        for edge in [
+            LatLon::new(near.lat + angle.to_degrees(), near.lon),
+            LatLon::new(near.lat, near.lon + east.to_degrees()),
+        ] {
+            let km = centre.distance_km(&edge);
+            assert!(
+                (km - near.radius_km).abs() < 1e-9,
+                "{edge:?} is {km} km away"
+            );
+            assert!(bounds.contains(&edge), "{edge:?} is outside {bounds:?}");
+        }
     }
 
     #[test]

@@ -248,7 +248,8 @@ pub async fn serve(config: Config, db: Db) -> Result<()> {
     }
 
     tracing::info!(address = %config.bind, "serving");
-    let outcome = axum::serve(listener, router(&config, db))
+    // Returns once SIGINT or SIGTERM has arrived and the requests in flight have finished.
+    let outcome = wikimisc::server::serve(listener, router(&config, db))
         .await
         .map_err(|source| crate::Error::io("http server", source));
 
@@ -275,37 +276,9 @@ fn cors(config: &Config) -> CorsLayer {
     }
 }
 
-/// Escapes text for HTML.
-///
-/// Everything rendered by this server comes from the source code rather than from a
-/// request, but escaping is applied anyway: the moment something becomes user- or
-/// data-derived, forgetting it would be an injection.
-pub fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn markup_in_text_is_escaped() {
-        assert_eq!(
-            escape("<script>alert('x' & \"y\")</script>"),
-            "&lt;script&gt;alert(&#39;x&#39; &amp; &quot;y&quot;)&lt;/script&gt;"
-        );
-    }
 
     /// The origin the map script loads tiles from, read out of the script itself.
     fn tile_origin() -> String {
